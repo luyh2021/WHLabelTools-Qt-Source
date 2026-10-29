@@ -1,0 +1,44 @@
+# 仅手动运行：从 Qt 官方下载源码，校验后上传到现有 Release 草稿。
+name: Fetch verified Qt source
+on:
+  workflow_dispatch:
+# 临时令牌仅对本仓库的 Release 附件有写入用途。
+permissions:
+  contents: write
+jobs:
+  upload-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Download and verify Qt 5.6.3 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive='qt-everywhere-opensource-src-5.6.3.zip'
+          url='https://download.qt.io/new_archive/qt/5.6/5.6.3/single/qt-everywhere-opensource-src-5.6.3.zip'
+          curl --fail --location --retry 5 --retry-all-errors --retry-delay 10 --continue-at - --output "$archive" "$url"
+          echo 'ffde2181608ab715ba62c1bbb55432c34c734b3ec1e9c71decc59092c1de7df4  qt-everywhere-opensource-src-5.6.3.zip' | sha256sum --check -
+          test "$(stat -c '%s' "$archive")" = '508020583'
+      - name: Attach verified archive to existing draft
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='WHLabelTools-2.0.4-Qt-5.6.3'
+          archive='qt-everywhere-opensource-src-5.6.3.zip'
+          release_id="$(gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --jq ".[] | select(.draft == true and .tag_name == \"${tag}\") | .id" | head -n 1)"
+          if [[ -z "$release_id" ]]; then
+            echo 'Expected draft release was not found.' >&2
+            exit 1
+          fi
+          curl --fail-with-body --silent --show-error --request POST \
+            --header "Authorization: Bearer ${GH_TOKEN}" \
+            --header 'Accept: application/vnd.github+json' \
+            --header 'Content-Type: application/zip' \
+            --data-binary "@${archive}" \
+            "https://uploads.github.com/repos/${GITHUB_REPOSITORY}/releases/${release_id}/assets?name=${archive}" \
+            --output response.json
+          test "$(jq -r '.state' response.json)" = 'uploaded'
+          test "$(jq -r '.size' response.json)" = '508020583'
+          jq '{name,size,state,digest,browser_download_url}' response.json
